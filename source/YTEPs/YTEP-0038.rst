@@ -1,0 +1,127 @@
+YTEP-0038: Dataset Class Refactor
+=================================
+
+
+Abstract
+--------
+
+Created: April 26, 2021
+Author: Jared Coughlin
+
+Currently, implementing a subclass of the ``Dataset`` class when writing a new frontend requires implementing a non-trivial amount of astronomy-specific code. This adds to the difficulty of implementing a frontend in domains other than astronomy. To ease this process, this YTEP proposes refactoring the ``Dataset`` class into a domain-agnostic base class and several smaller domain-specific child classes.
+
+Status
+------
+
+ #. WIP
+
+Project Management Links
+------------------------
+
+WIP.
+
+Detailed Description
+--------------------
+
+Background
+>>>>>>>>>>
+The ``Dataset`` class is one of yt's core classes. It provides an interface between the data I/O for each frontend and the analysis and visualization APIs. More concretely, the ``Dataset`` class is responsible for:
+    #. Tracking path information about the input file(s)
+    #. Overseeing the creation of the proper unit system
+    #. Overseeing the reading of the data off of disk
+    #. Setting up the coordinate handler
+    #. Setting up the index object
+    #. Setting up the appropriate derived attributes
+    #. Handling various operations such as finding extrema
+    #. Handling validation operations (checksums, uuids, etc.)
+    #. Creating and setting up the various fields contained in the input file
+All of the aforementioned points result in a monolithic class that can be unwieldly to work with, such as when writing a new frontend (especially if that frontend is in a domain other than astronomy).
+
+Problem
+>>>>>>>
+The problem posed by this YTEP is that a non-trivial amount of astronomy-specific code is baked into the structure and setup of the ``Dataset`` class. For example, one of the methods called in the constructor is ``setup_cosmology``, which requires various cosmological parameters, such as redshift and :math:`\Omega_{m,0}`, to be defined. This is unnecessary for non-astronomy domains such as geophysics, oceanography, meteorology, or quantum Monte Carlo.
+
+Other instances include:
+    #. The ``cosmological_simulation`` attribute,
+    #. The assumption of a well-defined simulation box,
+    #. The assumption of ``'gas'`` being the default particle type
+    #. The requirement that the IO handler be set up to read in fluid and particle fields, and
+    #.  Interweaving the assumption of astronomical quantities when setting units (c.f., ``Dataset.set_units``).
+
+Having to write faux values each of these parameters serves as a barrier to the creation of new frontends (especially by newer contributors) by making the process more complicated and difficult than it would otherwise be. These attributes and methods can also serve to obfuscate how best to implement domain-specific quantities that are not related to astronomy.
+
+Solution
+>>>>>>>>
+The proposed solution is to refactor the ``Dataset`` class into a domain-agnostic base class and several smaller, more specialized classes. An extension of this solution would be to further refactor the base ``Dataset`` class by moving the unit handling, field setup, and management aspects each to their own class. These smaller classes would then be managed by the base ``Dataset`` class.
+
+Implementation
+>>>>>>>>>>>>>>
+A rough outline of the base class might look something like the following:
+
+.. code-block:: python
+
+    class Dataset:
+        _instantiated = False
+
+        def __init__(self, filename, unit_system="cgs", domain="astro"):
+            if self._instantiated:
+                return
+            self.filename = filename
+            self.unit_system = unit_system
+            # domain could be returned by `_is_valid` in load()
+            self.domain = domain
+            # Other attributes here
+            ...
+            # Sub managers
+            self.meta_manager = setup_meta_manager() # checksums, uuids, etc.
+            self.path_manager = setup_path_manager(self.filename)
+            self.unit_manager = setup_unit_manager(self.unit_system)
+            self.geometry_manager = setup_geometry_manager()
+            self.coordinate_manager = setup_coordinate_manager()
+            self.domain_ds = setup_domain_ds(self.domain)
+            # Instantiating stuff
+            self.path_manager.parse_parameter_file()
+            self.unit_manager.setup_units()
+            self.geometry_manager.setup()
+            self.coordinate_manager.setup()
+            self.domain_ds.setup_domain_specific()
+            self._instantiated = True
+
+For the astronomy-specific dataset class we might have something like:
+
+.. code-block:: python
+
+    class AstronomyDataset:
+        def __init__(self):
+            self.default_fluid_type = "gas"
+            self.default_field = ("gas", "density")
+            self.fluid_types = ("gas", "deposit", "index")
+            self.particle_types = ("io",)
+            self.particle_types_raw = ("io",)
+            self.particle_unions = None
+            self.known_filters = None
+            self._index_class = None
+            self.derived_field_list = requires_index("derived_field_list")
+            self.fields = requires_index("fields")
+            self._particle_type_counts = None
+            self._proj_type = "quad_proj"
+            self._ionization_label_format = "roman_numeral"
+            self.fields_detected = False
+            self.setup_cosmology()
+
+Issues
+>>>>>>
+
+Outreach
+>>>>>>>>
+The community will be consulted via
+    #. Mailing list
+    #. Slack
+    #. Pull requests
+    #. The PR for this YTEP
+    #. Team meetings
+
+Backwards Compatibility
+-----------------------
+
+These proposed changes should not break backwards compatibility with the scripting API. However, these proposed changes would most likely break backwards compatibility with the internal API.
